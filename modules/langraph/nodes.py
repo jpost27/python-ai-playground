@@ -181,7 +181,7 @@ def _normalize_diff_for_git(diff: str) -> str:
     out: list[str] = []
     in_hunk = False
     for line in lines:
-        # Hunk header: allow optional spaces (e.g. @@ -29, 7 +29, 7 @@); put context on own line
+        # Hunk header: allow optional spaces; put context on own line
         hm = re.match(r"^@@\s*(-\d+)\s*,\s*(\d+)\s*\+\s*(\d+)\s*,\s*(\d+)\s*@@(.*)$", line)
         if hm:
             out.append(f"@@ {hm.group(1)},{hm.group(2)} +{hm.group(3)},{hm.group(4)} @@")
@@ -190,14 +190,45 @@ def _normalize_diff_for_git(diff: str) -> str:
                 out.append((" " + rest) if not rest.startswith((" ", "-", "+")) else rest)
             in_hunk = True
             continue
-        # Blank lines inside a hunk must be a single space for git apply
         if in_hunk and line == "":
             out.append(" ")
             continue
         if line.startswith("---") or line.startswith("+++"):
             in_hunk = False
         out.append(line)
+    # Fix hunk line counts: header must match number of lines in hunk body (or git says "corrupt")
+    out = _fix_hunk_line_counts(out)
     return "\n".join(out) + "\n"
+
+
+def _fix_hunk_line_counts(lines: list[str]) -> list[str]:
+    """Rewrite @@ -s,c +s,c @@ so c matches the actual number of lines in the hunk."""
+    result: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        result.append(line)
+        hm = re.match(r"^@@\s*(-\d+)\s*,\s*(\d+)\s*\+\s*(\d+)\s*,\s*(\d+)\s*@@\s*$", line.strip())
+        if hm:
+            i += 1
+            count_old = int(hm.group(2))
+            count_new = int(hm.group(4))
+            body_lines: list[str] = []
+            while i < len(lines) and not lines[i].startswith("@@"):
+                if lines[i].startswith("---") or lines[i].startswith("+++"):
+                    break
+                body_lines.append(lines[i])
+                i += 1
+            # Unified diff: body has count_old lines (with -) or context, count_new with + or context
+            # Each line is context (space), remove (-), or add (+). Old count = context + removed; new = context + added
+            n_old = sum(1 for L in body_lines if L.startswith(" ") or L.startswith("-"))
+            n_new = sum(1 for L in body_lines if L.startswith(" ") or L.startswith("+"))
+            if (n_old != count_old or n_new != count_new) and body_lines:
+                result[-1] = f"@@ {hm.group(1)},{n_old} +{hm.group(3)},{n_new} @@"
+            result.extend(body_lines)
+            continue
+        i += 1
+    return result
 
 
 def propose_fix(state: TicketState) -> dict:
@@ -336,10 +367,13 @@ def _create_branch_apply_and_push(repo, diff: str, token: str) -> tuple[str | No
     import tempfile
     from datetime import datetime, timezone
 
-    def _fail(msg: str, r: subprocess.CompletedProcess | None = None) -> tuple[None, str]:
+    def _fail(msg: str, r: subprocess.CompletedProcess | None = None, *, diff_used: str = "") -> tuple[None, str]:
         out = msg
         if r and (r.stderr or r.stdout):
-            out += " " + (r.stderr or r.stdout or "").strip()[:500]
+            out += "\n\nGit output:\n" + (r.stderr or r.stdout or "").strip()
+        if diff_used:
+            out += "\n\nDiff that was applied (for debugging):\n"
+            out += diff_used[:2000] + ("..." if len(diff_used) > 2000 else "")
         return (None, out)
 
     branch_name = "hotfix/support-ticket-" + datetime.now(tz=timezone.utc).strftime("%Y%m%d-%H%M%S")
@@ -388,7 +422,7 @@ def _create_branch_apply_and_push(repo, diff: str, token: str) -> tuple[str | No
             if r.returncode != 0:
                 subprocess.run(["git", "checkout", current], cwd=_REPO_ROOT, capture_output=True, timeout=5)
                 subprocess.run(["git", "branch", "-D", branch_name], cwd=_REPO_ROOT, capture_output=True)
-                return _fail("git apply failed (diff may have wrong paths/line numbers).", r)
+                return _fail("git apply failed.", r, diff_used=diff)
             r = subprocess.run(
                 ["git", "add", "-A"],
                 cwd=_REPO_ROOT,
