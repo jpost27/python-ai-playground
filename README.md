@@ -8,13 +8,21 @@ This project uses [uv](https://docs.astral.sh/uv/) for fast virtualenv creation 
 
 1. **Install uv** (one-time):
 
-   ```bash
-   curl -LsSf https://astral.sh/uv/install.sh | sh
-   ```
+   - **macOS / Linux:**  
+     ```bash
+     curl -LsSf https://astral.sh/uv/install.sh | sh
+     ```  
+     Or on macOS with Homebrew: `brew install uv`
 
-   Or with Homebrew: `brew install uv`
+   - **Windows (PowerShell):**  
+     ```powershell
+     powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+     ```  
+     Or with WinGet: `winget install --id=astral-sh.uv -e`  
+     Or with [Scoop](https://scoop.sh): `scoop install main/uv`
 
-2. **Create venv and install base deps** (from repo root):
+2. **Create venv and install base deps** (from repo root).  
+   Use **PowerShell** or **Terminal** (macOS/Linux); the same commands work on both:
 
    ```bash
    cd python-ai-playground
@@ -32,6 +40,8 @@ This project uses [uv](https://docs.astral.sh/uv/) for fast virtualenv creation 
    uv sync --extra code-gen     # Weeks 7–8: code gen, ruff, validation
    uv sync --extra all          # everything
    ```
+
+   The **langraph** module uses only base dependencies — no extra needed; `uv sync` is enough.
 
 ## Running a module
 
@@ -53,7 +63,7 @@ Create a `.env` in the project root (do not commit it). For example:
 
 ```env
 ANTHROPIC_API_KEY=sk-ant-...
-# ANTHROPIC_MODEL=claude-3-5-sonnet-20241022   # optional, override if you get model errors
+# ANTHROPIC_MODEL=claude-sonnet-4-6   # optional, override if you get model errors
 # GITHUB_TOKEN=...   # when you add code_search / code_gen
 ```
 
