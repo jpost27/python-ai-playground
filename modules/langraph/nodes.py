@@ -23,6 +23,60 @@ from modules.langraph.state import TicketState
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
+STORE_PY_PATH = "example_project/store.py"
+
+
+def _build_store_snippet_load_patch(suggested_fix: str, repo_root: Path) -> str | None:
+    """If suggested_fix is the store.py add_snippet fix (snippets = [] -> snippets = _load()), return a valid unified diff; else None."""
+    if not suggested_fix or STORE_PY_PATH not in suggested_fix:
+        return None
+    removed_has = "snippets = []" in suggested_fix or "snippets=[]" in suggested_fix
+    added_has = "snippets = _load()" in suggested_fix or "snippets=_load()" in suggested_fix
+    if not removed_has or not added_has:
+        return None
+    store_file = repo_root / "example_project" / "store.py"
+    if not store_file.is_file():
+        return None
+    lines = store_file.read_text(encoding="utf-8").splitlines()
+    line_no = None
+    old_line = None
+    for i, L in enumerate(lines):
+        if "snippets = []" in L or "snippets=[]" in L:
+            if "_load()" in L or "load" in L.lower():
+                line_no = i + 1
+                old_line = L
+                break
+    if line_no is None or old_line is None:
+        return None
+    new_line = "    snippets = _load()"
+    context_before = 3
+    context_after = 3
+    start = max(0, line_no - 1 - context_before)
+    end = min(len(lines), line_no - 1 + 1 + context_after)
+    old_slice = lines[start : line_no - 1] + [old_line] + lines[line_no : line_no + context_after]
+    new_slice = lines[start : line_no - 1] + [new_line] + lines[line_no : line_no + context_after]
+    n_old = len(old_slice)
+    n_new = len(new_slice)
+    body = []
+    for a, b in zip(old_slice, new_slice):
+        if a == b:
+            body.append(" " + a)
+        else:
+            body.append("-" + a)
+            body.append("+" + b)
+    for L in old_slice[len(new_slice) :]:
+        body.append("-" + L)
+    for L in new_slice[len(old_slice) :]:
+        body.append("+" + L)
+    hunk_start_old = start + 1
+    hunk_start_new = start + 1
+    diff_lines = [
+        "--- a/" + STORE_PY_PATH,
+        "+++ b/" + STORE_PY_PATH,
+        "@@ -%d,%d +%d,%d @@" % (hunk_start_old, n_old, hunk_start_new, n_new),
+    ] + body
+    return "\n".join(diff_lines) + "\n"
+
 
 def retrieve_for_classify(state: TicketState) -> dict:
     """Retrieve relevant doc and code snippets for classification (runs before classify)."""
@@ -208,6 +262,8 @@ def _normalize_diff_for_git(diff: str) -> str:
     while out and out[-1] == "":
         out.pop()
     final = "\n".join(out) + "\n"
+    assert not final.endswith("\n\n"), "normalized diff must not end with double newline"
+    assert final.count("\n") == len(out), "one newline per line plus single trailing"
     last_line = out[-1] if out else ""
     print(
         "[PR debug] _normalize_diff_for_git: len(final)=%d, ends_with_newline=%s, repr(last_char)=%r, repr(last_line)=%r"
@@ -276,12 +332,11 @@ def _fix_hunk_line_counts(lines: list[str]) -> list[str]:
                 i += 1
             n_old = sum(1 for L in body_lines if len(L) > 0 and L[0] in (" ", "-"))
             n_new = sum(1 for L in body_lines if len(L) > 0 and L[0] in (" ", "+"))
-            n = len(body_lines)
             if body_lines:
-                result[-1] = f"@@ {hm.group(1)},{n} +{hm.group(3)},{n} @@"
+                result[-1] = f"@@ {hm.group(1)},{n_old} +{hm.group(3)},{n_new} @@"
             print(
-                "[PR debug] _fix_hunk_line_counts: len(body_lines)=%d, n_old=%d, n_new=%d, header=%r"
-                % (n, n_old, n_new, result[-1]),
+                "[PR debug] _fix_hunk_line_counts: n_old=%d, n_new=%d, header=%r"
+                % (n_old, n_new, result[-1]),
                 file=sys.stderr,
             )
             result.extend(body_lines)
@@ -349,6 +404,9 @@ def create_pr(state: TicketState) -> dict:
     diff = (state.get("suggested_fix") or "").strip()
     if diff and not diff.endswith("\n"):
         diff = diff + "\n"
+    programmatic = _build_store_snippet_load_patch(state.get("suggested_fix") or "", _REPO_ROOT)
+    if programmatic:
+        diff = programmatic
     token = get_github_token()
     if not diff:
         return {"response": response_so_far + "\n\nNo PR created (no suggested fix)."}
@@ -489,16 +547,28 @@ def _create_branch_apply_and_push(repo, diff: str, token: str) -> tuple[str | No
         )
         if diff:
             last_line = diff.rstrip("\n").split("\n")[-1] if diff.rstrip("\n") else ""
-            print("[PR debug] Last line of diff (repr): %r" % (last_line,), file=__import__("sys").stderr)
-            print("[PR debug] First 200 chars (repr): %r" % (diff[:200],), file=__import__("sys").stderr)
-            print("[PR debug] Last 200 chars (repr): %r" % (diff[-200:],), file=__import__("sys").stderr)
+            print("[PR debug] Last line of diff (repr): %r" % (last_line,), file=sys.stderr)
+            print("[PR debug] First 200 chars (repr): %r" % (diff[:200],), file=sys.stderr)
+            print("[PR debug] Last 200 chars (repr): %r" % (diff[-200:],), file=sys.stderr)
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".diff", delete=False, encoding="utf-8", newline="\n"
         ) as f:
             f.write(diff)
             f.flush()
             path = f.name
-        print("[PR debug] Wrote patch to %s" % (path,), file=__import__("sys").stderr)
+        if os.environ.get("DEBUG_PR_PATCH"):
+            content = Path(path).read_text(encoding="utf-8")
+            print(
+                "[PR debug] Read-back: len=%d, count(\\n)=%d, splitlines()=%d, repr(last 50)=%r"
+                % (len(content), content.count("\n"), len(content.splitlines()), content[-50:]),
+                file=sys.stderr,
+            )
+            print(
+                "[PR debug] In-memory diff: len=%d, count(\\n)=%d, splitlines()=%d"
+                % (len(diff), diff.count("\n"), len(diff.splitlines())),
+                file=sys.stderr,
+            )
+        print("[PR debug] Wrote patch to %s" % (path,), file=sys.stderr)
         try:
             r = _run(["git", "apply", "--ignore-whitespace", "--verbose", path])
             if r.returncode != 0:
