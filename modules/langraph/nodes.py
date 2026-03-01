@@ -2,6 +2,7 @@
 
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 from modules.langraph.classifier import classify
@@ -204,7 +205,14 @@ def _normalize_diff_for_git(diff: str) -> str:
     out = _sanitize_hunk_body_prefixes(out)
     # Fix common LLM truncation: line that looks like snippet = {"id": ... but missing closing }
     out = _fix_truncated_diff_lines(out)
-    return "\n".join(out) + "\n"
+    final = "\n".join(out) + "\n"
+    last_line = out[-1] if out else ""
+    print(
+        "[PR debug] _normalize_diff_for_git: len(final)=%d, ends_with_newline=%s, repr(last_char)=%r, repr(last_line)=%r"
+        % (len(final), final.endswith("\n"), repr(final[-1]) if final else "N/A", repr(last_line)),
+        file=sys.stderr,
+    )
+    return final
 
 
 def _fix_truncated_diff_lines(lines: list[str]) -> list[str]:
@@ -264,10 +272,16 @@ def _fix_hunk_line_counts(lines: list[str]) -> list[str]:
                     break
                 body_lines.append(next_line)
                 i += 1
-            # Use total body line count for both sides so git apply reads exactly that many lines
+            n_old = sum(1 for L in body_lines if len(L) > 0 and L[0] in (" ", "-"))
+            n_new = sum(1 for L in body_lines if len(L) > 0 and L[0] in (" ", "+"))
             n = len(body_lines)
             if body_lines:
                 result[-1] = f"@@ {hm.group(1)},{n} +{hm.group(3)},{n} @@"
+            print(
+                "[PR debug] _fix_hunk_line_counts: len(body_lines)=%d, n_old=%d, n_new=%d, header=%r"
+                % (n, n_old, n_new, result[-1]),
+                file=sys.stderr,
+            )
             result.extend(body_lines)
             continue
         i += 1
@@ -464,12 +478,23 @@ def _create_branch_apply_and_push(repo, diff: str, token: str) -> tuple[str | No
         if r.returncode != 0:
             _restore_and_pop(current_branch, did_stash)
             return _fail("git checkout -b failed (ensure origin/{} exists).".format(default), r)
+        print(
+            "[PR debug] Before git apply: len(diff)=%d, repr(diff[-1])=%r, diff ends with newline=%s"
+            % (len(diff), repr(diff[-1]) if diff else "N/A", diff.endswith("\n") if diff else False),
+            file=sys.stderr,
+        )
+        if diff:
+            last_line = diff.rstrip("\n").split("\n")[-1] if diff.rstrip("\n") else ""
+            print("[PR debug] Last line of diff (repr): %r" % (last_line,), file=__import__("sys").stderr)
+            print("[PR debug] First 200 chars (repr): %r" % (diff[:200],), file=__import__("sys").stderr)
+            print("[PR debug] Last 200 chars (repr): %r" % (diff[-200:],), file=__import__("sys").stderr)
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".diff", delete=False, encoding="utf-8", newline="\n"
         ) as f:
             f.write(diff)
             f.flush()
             path = f.name
+        print("[PR debug] Wrote patch to %s" % (path,), file=__import__("sys").stderr)
         try:
             r = _run(["git", "apply", "--ignore-whitespace", "--verbose", path])
             if r.returncode != 0:
