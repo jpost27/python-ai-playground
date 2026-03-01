@@ -21,3 +21,8 @@ def has_anthropic_key() -> bool:
     """True if ANTHROPIC_API_KEY is set (for demo vs LLM mode)."""
     api_key, _ = load_anthropic_config()
     return bool(api_key)
+
+
+def get_github_token() -> str | None:
+    """Return GITHUB_TOKEN if set (for creating PRs)."""
+    return os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
