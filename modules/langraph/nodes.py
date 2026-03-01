@@ -345,6 +345,8 @@ def create_pr(state: TicketState) -> dict:
     """If suggested_fix and GITHUB_TOKEN, create branch, apply diff, push, open PR; else append message."""
     response_so_far = state.get("response") or ""
     diff = (state.get("suggested_fix") or "").strip()
+    if diff and not diff.endswith("\n"):
+        diff = diff + "\n"
     token = get_github_token()
     if not diff:
         return {"response": response_so_far + "\n\nNo PR created (no suggested fix)."}
