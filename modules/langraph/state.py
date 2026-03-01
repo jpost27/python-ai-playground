@@ -10,9 +10,10 @@ BUG = "bug"
 CLASSIFICATION_LABELS: tuple[str, ...] = (QUESTION, CONFUSION, BUG)
 
 
-class TicketState(TypedDict):
+class TicketState(TypedDict, total=False):
     """State passed through the support-ticket graph."""
 
     ticket: str
     classification: str
     response: str
+    docs_context: str  # User docs (e.g. USER_DOCS.md) for question/confusion answers
