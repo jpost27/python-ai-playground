@@ -344,7 +344,6 @@ def _create_branch_apply_and_push(repo, diff: str, token: str) -> tuple[str | No
 
     branch_name = "hotfix/support-ticket-" + datetime.now(tz=timezone.utc).strftime("%Y%m%d-%H%M%S")
     try:
-        default = repo.default_branch
         r = subprocess.run(
             ["git", "status", "--porcelain"],
             cwd=_REPO_ROOT,
@@ -364,16 +363,10 @@ def _create_branch_apply_and_push(repo, diff: str, token: str) -> tuple[str | No
             timeout=5,
         )
         current = (r.stdout or "").strip() or "main"
+        # Create hotfix branch from current HEAD so paths like example_project/store.py exist
+        # (branching from origin/default would use remote tree, which may not have local paths)
         r = subprocess.run(
-            ["git", "fetch", "origin", default],
-            cwd=_REPO_ROOT,
-            capture_output=True,
-            timeout=10,
-        )
-        if r.returncode != 0:
-            return _fail("git fetch failed.", r)
-        r = subprocess.run(
-            ["git", "checkout", "-b", branch_name, f"origin/{default}"],
+            ["git", "checkout", "-b", branch_name],
             cwd=_REPO_ROOT,
             capture_output=True,
             timeout=5,
