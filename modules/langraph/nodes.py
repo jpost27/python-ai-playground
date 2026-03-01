@@ -203,8 +203,10 @@ def _normalize_diff_for_git(diff: str) -> str:
         out.append(line)
     out = _fix_hunk_line_counts(out)
     out = _sanitize_hunk_body_prefixes(out)
-    # Fix common LLM truncation: line that looks like snippet = {"id": ... but missing closing }
     out = _fix_truncated_diff_lines(out)
+    # Avoid trailing empty lines (would create "line 13" and trigger corrupt patch)
+    while out and out[-1] == "":
+        out.pop()
     final = "\n".join(out) + "\n"
     last_line = out[-1] if out else ""
     print(
