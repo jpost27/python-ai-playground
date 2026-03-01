@@ -177,19 +177,25 @@ def _normalize_diff_for_git(diff: str) -> str:
     """Fix common LLM diff issues so git apply accepts the patch."""
     if not diff:
         return ""
-    # Normalize line endings and ensure trailing newline
     lines = diff.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n").split("\n")
     out: list[str] = []
+    in_hunk = False
     for line in lines:
-        # Hunk header: git expects @@ -start,count +start,count @@ only; context on same line causes "corrupt patch"
-        hm = re.match(r"^(@@ -\d+,?\d* +\d+,?\d* @@)(.*)$", line)
+        # Hunk header: allow optional spaces (e.g. @@ -29, 7 +29, 7 @@); put context on own line
+        hm = re.match(r"^@@\s*(-\d+)\s*,\s*(\d+)\s*\+\s*(\d+)\s*,\s*(\d+)\s*@@(.*)$", line)
         if hm:
-            out.append(hm.group(1))
-            rest = hm.group(2).strip()
+            out.append(f"@@ {hm.group(1)},{hm.group(2)} +{hm.group(3)},{hm.group(4)} @@")
+            rest = hm.group(5).strip()
             if rest:
-                # Context lines must start with a single space
                 out.append((" " + rest) if not rest.startswith((" ", "-", "+")) else rest)
+            in_hunk = True
             continue
+        # Blank lines inside a hunk must be a single space for git apply
+        if in_hunk and line == "":
+            out.append(" ")
+            continue
+        if line.startswith("---") or line.startswith("+++"):
+            in_hunk = False
         out.append(line)
     return "\n".join(out) + "\n"
 
