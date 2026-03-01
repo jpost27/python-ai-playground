@@ -201,9 +201,27 @@ def _normalize_diff_for_git(diff: str) -> str:
                 line = " " + line
         out.append(line)
     out = _fix_hunk_line_counts(out)
-    # Final pass: guarantee every hunk body line has exactly one of space, -, +
     out = _sanitize_hunk_body_prefixes(out)
+    # Fix common LLM truncation: line that looks like snippet = {"id": ... but missing closing }
+    out = _fix_truncated_diff_lines(out)
     return "\n".join(out) + "\n"
+
+
+def _fix_truncated_diff_lines(lines: list[str]) -> list[str]:
+    """Repair lines that look like truncated snippet = {\"id\": ... } (missing closing brace)."""
+    result: list[str] = []
+    for line in lines:
+        stripped = line.rstrip()
+        if (
+            stripped.startswith((" ", "-", "+"))
+            and "snippet" in stripped
+            and '{"id"' in stripped
+            and "created" in stripped
+            and not stripped.endswith("}")
+        ):
+            line = stripped + "}"
+        result.append(line)
+    return result
 
 
 def _sanitize_hunk_body_prefixes(lines: list[str]) -> list[str]:
