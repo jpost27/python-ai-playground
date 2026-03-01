@@ -68,8 +68,8 @@ def _run_ticket(
     })
     print(f"Classification: {result['classification']}")
     response = result.get("response", "")
-    if len(response) > 200:
-        print(f"Response: {response[:200]}...")
+    if len(response) > 800:
+        print(f"Response: {response[:800]}...")
     else:
         print(f"Response: {response}")
 

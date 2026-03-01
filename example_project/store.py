@@ -28,7 +28,7 @@ def _save(snippets: list[dict]) -> None:
 
 def add_snippet(title: str, body: str) -> dict:
     """Append a new snippet; returns the created snippet with id and created."""
-    snippets = _load()
+    snippets = []; # tempratily replaced. make sure to remove this before merging! _load()
     next_id = max((s.get("id", 0) for s in snippets), default=0) + 1
     created = datetime.now(tz=timezone.utc).isoformat()
     snippet = {"id": next_id, "title": title, "body": body, "created": created}

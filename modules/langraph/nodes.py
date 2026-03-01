@@ -13,7 +13,9 @@ from modules.langraph.llm import (
     call_claude,
 )
 from modules.langraph.retrieval import (
+    get_search_queries_for_bug,
     get_search_queries_from_ticket,
+    retrieve_relevant_code,
     retrieve_relevant_docs,
 )
 from modules.langraph.state import TicketState
@@ -81,6 +83,18 @@ def suggest_help(state: TicketState) -> dict:
         return {"response": text or "I couldn't generate suggestions."}
     except Exception as e:
         return {"response": f"[LLM call failed] {type(e).__name__}: {e}"}
+
+
+def retrieve_code(state: TicketState) -> dict:
+    """Filter code to only chunks relevant to the bug (bug path)."""
+    full_code = (state.get("code_context") or "").strip()
+    if not full_code:
+        return {}
+    ticket = state.get("ticket") or ""
+    llm_cb = call_claude if has_anthropic_key() else None
+    queries = get_search_queries_for_bug(ticket, llm_callback=llm_cb)
+    filtered = retrieve_relevant_code(full_code, ticket, search_queries=queries)
+    return {"code_context": filtered}
 
 
 def root_cause_analysis(state: TicketState) -> dict:
