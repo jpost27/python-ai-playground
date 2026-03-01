@@ -57,6 +57,19 @@ uv run python -m modules.code_gen.main
 
 `uv run` uses the project’s virtualenv and dependencies automatically.
 
+## Example project (Snippet Stash)
+
+A minimal CLI app lives in `example_project/` for use with the LangGraph ticket demo. It has no extra dependencies.
+
+```bash
+uv run python -m example_project.main add "My note" "Some text"
+uv run python -m example_project.main list
+uv run python -m example_project.main get 1
+uv run python -m example_project.main delete 1
+```
+
+See `example_project/README.md` for a quick reference and **`example_project/docs/USER_DOCS.md`** for full user documentation (what it is, how to use it, limitations, examples, and common questions).
+
 ## API keys
 
 Create a `.env` in the project root (do not commit it). For example:
@@ -89,6 +102,10 @@ python-ai-playground/
 ├── README.md
 ├── .env                     # your keys (gitignored)
 ├── .env.example             # template
+├── example_project/        # minimal CLI (Snippet Stash) for LangGraph demos
+│   ├── main.py
+│   ├── store.py
+│   └── README.md
 └── modules/
     ├── rag/                 # Weeks 1–2: RAG, vector DB, “answer from docs”
     │   └── main.py
