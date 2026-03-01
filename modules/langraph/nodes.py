@@ -165,11 +165,33 @@ def _extract_diff_from_llm(text: str) -> str:
     # Prefer fenced block with diff
     m = re.search(r"```(?:diff)?\s*\n(.*?)```", text, re.DOTALL)
     if m:
-        return m.group(1).strip()
-    # If the whole output looks like a diff (starts with --- or +++), use it
-    if text.strip().startswith("---") or text.strip().startswith("+++"):
-        return text.strip()
-    return ""
+        raw = m.group(1).strip()
+    elif text.strip().startswith("---") or text.strip().startswith("+++"):
+        raw = text.strip()
+    else:
+        return ""
+    return _normalize_diff_for_git(raw)
+
+
+def _normalize_diff_for_git(diff: str) -> str:
+    """Fix common LLM diff issues so git apply accepts the patch."""
+    if not diff:
+        return ""
+    # Normalize line endings and ensure trailing newline
+    lines = diff.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n").split("\n")
+    out: list[str] = []
+    for line in lines:
+        # Hunk header: git expects @@ -start,count +start,count @@ only; context on same line causes "corrupt patch"
+        hm = re.match(r"^(@@ -\d+,?\d* +\d+,?\d* @@)(.*)$", line)
+        if hm:
+            out.append(hm.group(1))
+            rest = hm.group(2).strip()
+            if rest:
+                # Context lines must start with a single space
+                out.append((" " + rest) if not rest.startswith((" ", "-", "+")) else rest)
+            continue
+        out.append(line)
+    return "\n".join(out) + "\n"
 
 
 def propose_fix(state: TicketState) -> dict:
