@@ -12,6 +12,10 @@ from modules.langraph.llm import (
     SUPPORT_AGENT_SYSTEM,
     call_claude,
 )
+from modules.langraph.retrieval import (
+    get_search_queries_from_ticket,
+    retrieve_relevant_docs,
+)
 from modules.langraph.state import TicketState
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -49,6 +53,18 @@ def answer_question(state: TicketState) -> dict:
         return {"response": text or "I couldn't generate an answer."}
     except Exception:
         return {"response": "[Demo mode] LLM call failed. Check API key and model."}
+
+
+def retrieve_docs(state: TicketState) -> dict:
+    """Filter docs to only sections relevant to the ticket (question/confusion path)."""
+    full_docs = (state.get("docs_context") or "").strip()
+    if not full_docs:
+        return {}
+    ticket = state.get("ticket") or ""
+    llm_cb = call_claude if has_anthropic_key() else None
+    queries = get_search_queries_from_ticket(ticket, llm_callback=llm_cb)
+    filtered = retrieve_relevant_docs(full_docs, ticket, search_queries=queries)
+    return {"docs_context": filtered}
 
 
 def suggest_help(state: TicketState) -> dict:
