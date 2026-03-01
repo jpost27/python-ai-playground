@@ -1,0 +1,38 @@
+# Environment
+.venv/
+venv/
+env/
+.python-version.local
+
+# uv / pip
+uv.lock
+*.egg-info/
+dist/
+build/
+
+# Environment and secrets (never commit)
+.env
+.env.local
+*.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project
+*.log
+chroma_data/
+*.db
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
