@@ -8,6 +8,7 @@ from modules.langraph.state import CONFUSION, QUESTION, TicketState
 from modules.langraph import nodes
 
 # Node names (must match add_node keys and route return values)
+NODE_RETRIEVE_FOR_CLASSIFY = "retrieve_for_classify"
 NODE_RETRIEVE_DOCS = "retrieve_docs"
 NODE_RETRIEVE_CODE = "retrieve_code"
 NODE_ANSWER = "answer_question"
@@ -39,6 +40,7 @@ def build_graph() -> StateGraph:
     """Build and compile the support-ticket graph."""
     builder = StateGraph(TicketState)
 
+    builder.add_node(NODE_RETRIEVE_FOR_CLASSIFY, nodes.retrieve_for_classify)
     builder.add_node("classify", nodes.classify_ticket)
     builder.add_node(NODE_RETRIEVE_DOCS, nodes.retrieve_docs)
     builder.add_node(NODE_RETRIEVE_CODE, nodes.retrieve_code)
@@ -48,7 +50,8 @@ def build_graph() -> StateGraph:
     builder.add_node(NODE_PROPOSE_FIX, nodes.propose_fix)
     builder.add_node(NODE_CREATE_PR, nodes.create_pr)
 
-    builder.add_edge(START, "classify")
+    builder.add_edge(START, NODE_RETRIEVE_FOR_CLASSIFY)
+    builder.add_edge(NODE_RETRIEVE_FOR_CLASSIFY, "classify")
     builder.add_conditional_edges("classify", route_by_classification)
     builder.add_conditional_edges(NODE_RETRIEVE_DOCS, route_after_retrieve)
     builder.add_edge(NODE_RETRIEVE_CODE, NODE_ROOT_CAUSE)

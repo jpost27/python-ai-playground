@@ -23,9 +23,32 @@ from modules.langraph.state import TicketState
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
+def retrieve_for_classify(state: TicketState) -> dict:
+    """Retrieve relevant doc and code snippets for classification (runs before classify)."""
+    full_docs = (state.get("docs_context") or "").strip()
+    full_code = (state.get("code_context") or "").strip()
+    ticket = state.get("ticket") or ""
+    llm_cb = call_claude if has_anthropic_key() else None
+    out: dict = {}
+    if full_docs:
+        queries = get_search_queries_from_ticket(ticket, llm_callback=llm_cb)
+        out["docs_for_classify"] = retrieve_relevant_docs(
+            full_docs, ticket, search_queries=queries, max_chars=3500
+        )
+    if full_code:
+        queries = get_search_queries_for_bug(ticket, llm_callback=llm_cb)
+        out["code_for_classify"] = retrieve_relevant_code(
+            full_code, ticket, search_queries=queries, max_chars=4500
+        )
+    return out
+
+
 def classify_ticket(state: TicketState) -> dict:
-    """Set classification from ticket text."""
-    return {"classification": classify(state["ticket"])}
+    """Set classification from ticket text and (when present) relevant docs/code context."""
+    ticket = state.get("ticket") or ""
+    docs = (state.get("docs_for_classify") or "").strip()
+    code = (state.get("code_for_classify") or "").strip()
+    return {"classification": classify(ticket, docs_context=docs, code_context=code)}
 
 
 def _prompt_with_docs(docs_context: str, ticket: str, instruction: str) -> str:
@@ -150,10 +173,10 @@ def _extract_diff_from_llm(text: str) -> str:
 
 
 def propose_fix(state: TicketState) -> dict:
-    """Propose a code fix from RCA and code context; set suggested_fix and append to response."""
+    """Propose a code fix from RCA and full code context (full so diff line numbers match)."""
     rca = (state.get("rca_result") or "").strip()
     ticket = state.get("ticket") or ""
-    code = (state.get("code_context") or "").strip()
+    code = (state.get("full_code_context") or state.get("code_context") or "").strip()
     response_so_far = state.get("response") or ""
     if not has_anthropic_key():
         return {
@@ -213,11 +236,12 @@ def create_pr(state: TicketState) -> dict:
                 "pr_url": "",
                 "response": response_so_far + "\n\nCould not resolve repo for PR (not a GitHub repo or no remote).",
             }
-        branch_name = _create_branch_apply_and_push(repo, diff, token)
+        branch_name, err = _create_branch_apply_and_push(repo, diff, token)
         if not branch_name:
+            detail = f" {err}" if err else ""
             return {
                 "pr_url": "",
-                "response": response_so_far + "\n\nFailed to apply diff or push branch.",
+                "response": response_so_far + f"\n\nFailed to apply diff or push branch.{detail}",
             }
         pr = repo.create_pull(
             title="Hotfix from support ticket",
@@ -278,11 +302,17 @@ def _get_repo_for_pr(token: str):
         return None
 
 
-def _create_branch_apply_and_push(repo, diff: str, token: str) -> str | None:
-    """Create hotfix branch, apply diff, commit, push. Returns branch name or None."""
+def _create_branch_apply_and_push(repo, diff: str, token: str) -> tuple[str | None, str]:
+    """Create hotfix branch, apply diff, commit, push. Returns (branch_name, error_detail)."""
     import os
     import tempfile
     from datetime import datetime, timezone
+
+    def _fail(msg: str, r: subprocess.CompletedProcess | None = None) -> tuple[None, str]:
+        out = msg
+        if r and (r.stderr or r.stdout):
+            out += " " + (r.stderr or r.stdout or "").strip()[:500]
+        return (None, out)
 
     branch_name = "hotfix/support-ticket-" + datetime.now(tz=timezone.utc).strftime("%Y%m%d-%H%M%S")
     try:
@@ -295,10 +325,9 @@ def _create_branch_apply_and_push(repo, diff: str, token: str) -> str | None:
             timeout=5,
         )
         if r.returncode != 0:
-            return None
+            return _fail("git status failed.", r)
         if r.stdout.strip():
-            # Uncommitted changes - we need a clean tree to apply. Stash or abort.
-            return None
+            return _fail("Uncommitted changes in repo; need a clean tree. Commit or stash first.")
         r = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
             cwd=_REPO_ROOT,
@@ -314,7 +343,7 @@ def _create_branch_apply_and_push(repo, diff: str, token: str) -> str | None:
             timeout=10,
         )
         if r.returncode != 0:
-            return None
+            return _fail("git fetch failed.", r)
         r = subprocess.run(
             ["git", "checkout", "-b", branch_name, f"origin/{default}"],
             cwd=_REPO_ROOT,
@@ -322,7 +351,7 @@ def _create_branch_apply_and_push(repo, diff: str, token: str) -> str | None:
             timeout=5,
         )
         if r.returncode != 0:
-            return None
+            return _fail("git checkout -b failed.", r)
         with tempfile.NamedTemporaryFile(mode="w", suffix=".diff", delete=False, encoding="utf-8") as f:
             f.write(diff)
             f.flush()
@@ -338,7 +367,7 @@ def _create_branch_apply_and_push(repo, diff: str, token: str) -> str | None:
             if r.returncode != 0:
                 subprocess.run(["git", "checkout", current], cwd=_REPO_ROOT, capture_output=True, timeout=5)
                 subprocess.run(["git", "branch", "-D", branch_name], cwd=_REPO_ROOT, capture_output=True)
-                return None
+                return _fail("git apply failed (diff may have wrong paths/line numbers).", r)
             r = subprocess.run(
                 ["git", "add", "-A"],
                 cwd=_REPO_ROOT,
@@ -349,17 +378,19 @@ def _create_branch_apply_and_push(repo, diff: str, token: str) -> str | None:
                 ["git", "commit", "-m", "Hotfix from support ticket (RCA)"],
                 cwd=_REPO_ROOT,
                 capture_output=True,
+                text=True,
                 timeout=5,
             )
             if r.returncode != 0:
                 subprocess.run(["git", "checkout", current], cwd=_REPO_ROOT, capture_output=True, timeout=5)
                 subprocess.run(["git", "branch", "-D", branch_name], cwd=_REPO_ROOT, capture_output=True)
-                return None
+                return _fail("git commit failed.", r)
             env = {**os.environ, "GITHUB_TOKEN": token, "GH_TOKEN": token}
             r = subprocess.run(
                 ["git", "push", "-u", "origin", branch_name],
                 cwd=_REPO_ROOT,
                 capture_output=True,
+                text=True,
                 timeout=30,
                 env=env,
             )
@@ -374,18 +405,19 @@ def _create_branch_apply_and_push(repo, diff: str, token: str) -> str | None:
                     ["git", "push", "-u", "push-origin", branch_name],
                     cwd=_REPO_ROOT,
                     capture_output=True,
+                    text=True,
                     timeout=30,
                 )
                 subprocess.run(["git", "remote", "remove", "push-origin"], cwd=_REPO_ROOT, capture_output=True)
                 if r2.returncode != 0:
                     subprocess.run(["git", "checkout", current], cwd=_REPO_ROOT, capture_output=True, timeout=5)
-                    return None
+                    return _fail("git push failed.", r2)
             subprocess.run(["git", "checkout", current], cwd=_REPO_ROOT, capture_output=True, timeout=5)
-            return branch_name
+            return (branch_name, "")
         finally:
             try:
                 os.unlink(path)
             except OSError:
                 pass
-    except Exception:
-        return None
+    except Exception as e:
+        return (None, str(e))

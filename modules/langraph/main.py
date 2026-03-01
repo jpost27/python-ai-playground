@@ -28,6 +28,18 @@ _EXAMPLES = [
     "The app crashes when I click Save on a form with more than 50 fields.",
 ]
 
+_MAX_RESPONSE_LENGTH = 2000
+
+
+def _format_step_value(key: str, value: str) -> str:
+    """Shorten long values for step output."""
+    if not value:
+        return ""
+    s = value.strip()
+    if len(s) > 400:
+        return s[:400] + "..."
+    return s
+
 
 def _load_docs_context() -> str:
     """Load example project user docs for question/confusion context."""
@@ -58,20 +70,45 @@ def _run_ticket(
     docs_context: str,
     code_context: str,
 ) -> None:
-    """Invoke graph for one ticket and print classification and response."""
-    result = graph.invoke({
+    """Run graph with streaming; print current node and step outputs, then final response."""
+    initial = {
         "ticket": ticket,
         "classification": "",
         "response": "",
         "docs_context": docs_context,
         "code_context": code_context,
-    })
-    print(f"Classification: {result['classification']}")
-    response = result.get("response", "")
-    if len(response) > 800:
-        print(f"Response: {response[:800]}...")
-    else:
-        print(f"Response: {response}")
+        "full_code_context": code_context,
+    }
+    final = None
+    for mode, chunk in graph.stream(initial, stream_mode=["updates", "values"]):
+        if mode == "updates":
+            for node_name, update in chunk.items():
+                print(f"\n[Node: {node_name}]")
+                if not isinstance(update, dict):
+                    continue
+                if "classification" in update and update["classification"]:
+                    print(f"  Classification: {update['classification']}")
+                if "response" in update and (update["response"] or "").strip():
+                    text = _format_step_value("response", update["response"])
+                    print(f"  Response: {text}")
+                if "rca_result" in update and (update["rca_result"] or "").strip():
+                    text = _format_step_value("rca_result", update["rca_result"])
+                    print(f"  RCA: {text}")
+                if "suggested_fix" in update and (update["suggested_fix"] or "").strip():
+                    diff = (update["suggested_fix"] or "").strip()
+                    print(f"  Suggested fix (diff): {len(diff)} chars")
+                if "pr_url" in update and (update["pr_url"] or "").strip():
+                    print(f"  PR URL: {update['pr_url']}")
+        elif mode == "values":
+            final = chunk
+    if final:
+        print(f"\n--- Final ---")
+        print(f"Classification: {final.get('classification', '')}")
+        response = final.get("response", "")
+        if len(response) > _MAX_RESPONSE_LENGTH:
+            print(f"Response: {response[:_MAX_RESPONSE_LENGTH]}...")
+        else:
+            print(f"Response: {response}")
 
 
 def _run_examples(graph, docs_context: str, code_context: str) -> None:
