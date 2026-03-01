@@ -28,7 +28,7 @@ _EXAMPLES = [
     "The app crashes when I click Save on a form with more than 50 fields.",
 ]
 
-_MAX_RESPONSE_LENGTH = 2000
+_MAX_RESPONSE_LENGTH = 5000
 
 
 def _format_step_value(key: str, value: str) -> str:
