@@ -248,7 +248,7 @@ def _sanitize_hunk_body_prefixes(lines: list[str]) -> list[str]:
 
 
 def _fix_hunk_line_counts(lines: list[str]) -> list[str]:
-    """Rewrite @@ -s,c +s,c @@ so c matches the actual number of lines in the hunk."""
+    """Rewrite @@ -s,c +s,c @@ so c equals the number of body lines (git apply expects this)."""
     result: list[str] = []
     i = 0
     while i < len(lines):
@@ -264,10 +264,10 @@ def _fix_hunk_line_counts(lines: list[str]) -> list[str]:
                     break
                 body_lines.append(next_line)
                 i += 1
-            n_old = sum(1 for L in body_lines if len(L) > 0 and L[0] in (" ", "-"))
-            n_new = sum(1 for L in body_lines if len(L) > 0 and L[0] in (" ", "+"))
+            # Use total body line count for both sides so git apply reads exactly that many lines
+            n = len(body_lines)
             if body_lines:
-                result[-1] = f"@@ {hm.group(1)},{n_old} +{hm.group(3)},{n_new} @@"
+                result[-1] = f"@@ {hm.group(1)},{n} +{hm.group(3)},{n} @@"
             result.extend(body_lines)
             continue
         i += 1
