@@ -365,10 +365,20 @@ def _get_repo_for_pr(token: str):
 
 
 def _create_branch_apply_and_push(repo, diff: str, token: str) -> tuple[str | None, str]:
-    """Create hotfix branch, apply diff, commit, push. Returns (branch_name, error_detail)."""
+    """Stash if dirty, switch to default branch, create hotfix from it, apply/commit/push, then restore."""
     import os
     import tempfile
     from datetime import datetime, timezone
+
+    def _run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            cmd,
+            cwd=_REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=kwargs.pop("timeout", 10),
+            **kwargs,
+        )
 
     def _fail(msg: str, r: subprocess.CompletedProcess | None = None, *, diff_used: str = "") -> tuple[None, str]:
         out = msg
@@ -379,98 +389,62 @@ def _create_branch_apply_and_push(repo, diff: str, token: str) -> tuple[str | No
             out += diff_used[:2000] + ("..." if len(diff_used) > 2000 else "")
         return (None, out)
 
+    def _restore_and_pop(current_branch: str, did_stash: bool) -> None:
+        _run(["git", "checkout", current_branch], timeout=5)
+        if did_stash:
+            _run(["git", "stash", "pop"])
+
+    default = repo.default_branch
     branch_name = "hotfix/support-ticket-" + datetime.now(tz=timezone.utc).strftime("%Y%m%d-%H%M%S")
     try:
-        r = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=_REPO_ROOT,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
+        r = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"])
+        current_branch = (r.stdout or "").strip() or "main"
+        r = _run(["git", "status", "--porcelain"])
         if r.returncode != 0:
             return _fail("git status failed.", r)
-        if r.stdout.strip():
-            return _fail("Uncommitted changes in repo; need a clean tree. Commit or stash first.")
-        r = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=_REPO_ROOT,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        current = (r.stdout or "").strip() or "main"
-        # Create hotfix branch from current HEAD so paths like example_project/store.py exist
-        # (branching from origin/default would use remote tree, which may not have local paths)
-        r = subprocess.run(
-            ["git", "checkout", "-b", branch_name],
-            cwd=_REPO_ROOT,
-            capture_output=True,
-            timeout=5,
-        )
+        did_stash = bool(r.stdout.strip())
+        if did_stash:
+            r = _run(["git", "stash", "push", "-m", "Auto-stash for hotfix PR"])
+            if r.returncode != 0:
+                return _fail("git stash failed.", r)
+        r = _run(["git", "fetch", "origin", default], timeout=15)
         if r.returncode != 0:
-            return _fail("git checkout -b failed.", r)
+            _restore_and_pop(current_branch, did_stash)
+            return _fail("git fetch failed.", r)
+        r = _run(["git", "checkout", "-b", branch_name, f"origin/{default}"])
+        if r.returncode != 0:
+            _restore_and_pop(current_branch, did_stash)
+            return _fail("git checkout -b failed (ensure origin/{} exists).".format(default), r)
         with tempfile.NamedTemporaryFile(mode="w", suffix=".diff", delete=False, encoding="utf-8") as f:
             f.write(diff)
             f.flush()
             path = f.name
         try:
-            r = subprocess.run(
-                ["git", "apply", "--ignore-whitespace", path],
-                cwd=_REPO_ROOT,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
+            r = _run(["git", "apply", "--ignore-whitespace", path])
             if r.returncode != 0:
-                subprocess.run(["git", "checkout", current], cwd=_REPO_ROOT, capture_output=True, timeout=5)
-                subprocess.run(["git", "branch", "-D", branch_name], cwd=_REPO_ROOT, capture_output=True)
+                _run(["git", "checkout", current_branch])
+                _run(["git", "branch", "-D", branch_name])
+                _restore_and_pop(current_branch, did_stash)
                 return _fail("git apply failed.", r, diff_used=diff)
-            r = subprocess.run(
-                ["git", "add", "-A"],
-                cwd=_REPO_ROOT,
-                capture_output=True,
-                timeout=5,
-            )
-            r = subprocess.run(
-                ["git", "commit", "-m", "Hotfix from support ticket (RCA)"],
-                cwd=_REPO_ROOT,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
+            r = _run(["git", "add", "-A"])
+            r = _run(["git", "commit", "-m", "Hotfix from support ticket (RCA)"])
             if r.returncode != 0:
-                subprocess.run(["git", "checkout", current], cwd=_REPO_ROOT, capture_output=True, timeout=5)
-                subprocess.run(["git", "branch", "-D", branch_name], cwd=_REPO_ROOT, capture_output=True)
+                _run(["git", "checkout", current_branch])
+                _run(["git", "branch", "-D", branch_name])
+                _restore_and_pop(current_branch, did_stash)
                 return _fail("git commit failed.", r)
             env = {**os.environ, "GITHUB_TOKEN": token, "GH_TOKEN": token}
-            r = subprocess.run(
-                ["git", "push", "-u", "origin", branch_name],
-                cwd=_REPO_ROOT,
-                capture_output=True,
-                text=True,
-                timeout=30,
-                env=env,
-            )
+            r = _run(["git", "push", "-u", "origin", branch_name], timeout=30, env=env)
             if r.returncode != 0:
                 push_url = repo.clone_url.replace("https://", f"https://x-access-token:{token}@")
-                subprocess.run(
-                    ["git", "remote", "add", "push-origin", push_url],
-                    cwd=_REPO_ROOT,
-                    capture_output=True,
-                )
-                r2 = subprocess.run(
-                    ["git", "push", "-u", "push-origin", branch_name],
-                    cwd=_REPO_ROOT,
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                )
-                subprocess.run(["git", "remote", "remove", "push-origin"], cwd=_REPO_ROOT, capture_output=True)
+                _run(["git", "remote", "add", "push-origin", push_url])
+                r2 = _run(["git", "push", "-u", "push-origin", branch_name], timeout=30)
+                _run(["git", "remote", "remove", "push-origin"])
                 if r2.returncode != 0:
-                    subprocess.run(["git", "checkout", current], cwd=_REPO_ROOT, capture_output=True, timeout=5)
+                    _run(["git", "checkout", current_branch])
+                    _restore_and_pop(current_branch, did_stash)
                     return _fail("git push failed.", r2)
-            subprocess.run(["git", "checkout", current], cwd=_REPO_ROOT, capture_output=True, timeout=5)
+            _restore_and_pop(current_branch, did_stash)
             return (branch_name, "")
         finally:
             try:

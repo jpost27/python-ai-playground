@@ -23,9 +23,10 @@ _USER_DOCS_PATH = _REPO_ROOT / "example_project" / "docs" / "USER_DOCS.md"
 _EXAMPLE_PROJECT_DIR = _REPO_ROOT / "example_project"
 
 _EXAMPLES = [
-    "What is the maximum file size I can upload?",
-    "I can't find where to export my report to PDF. Can you help?",
-    "The app crashes when I click Save on a form with more than 50 fields.",
+    # "What is the maximum file size I can upload?",
+    # "I can't find where to export my report to PDF. Can you help?",
+    # "The app crashes when I click Save on a form with more than 50 fields.",
+    "for some reason i can only have one snippet at a time. isn't this supposed to allow multiple snippets?",
 ]
 
 _MAX_RESPONSE_LENGTH = 5000
