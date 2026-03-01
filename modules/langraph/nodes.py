@@ -181,13 +181,13 @@ def _normalize_diff_for_git(diff: str) -> str:
     out: list[str] = []
     in_hunk = False
     for line in lines:
-        # Hunk header: allow optional spaces; put context on own line
         hm = re.match(r"^@@\s*(-\d+)\s*,\s*(\d+)\s*\+\s*(\d+)\s*,\s*(\d+)\s*@@(.*)$", line)
         if hm:
             out.append(f"@@ {hm.group(1)},{hm.group(2)} +{hm.group(3)},{hm.group(4)} @@")
             rest = hm.group(5).strip()
             if rest:
-                out.append((" " + rest) if not rest.startswith((" ", "-", "+")) else rest)
+                first = rest[0] if rest else ""
+                out.append(rest if first in (" ", "-", "+") else " " + rest)
             in_hunk = True
             continue
         if in_hunk and line == "":
@@ -195,13 +195,38 @@ def _normalize_diff_for_git(diff: str) -> str:
             continue
         if line.startswith("---") or line.startswith("+++"):
             in_hunk = False
-        # In unified diff, every hunk body line must start with space (context), -, or +
-        if in_hunk and line and not line.startswith((" ", "-", "+")):
-            line = " " + line
+        if in_hunk and line:
+            first = line[0]
+            if first not in (" ", "-", "+"):
+                line = " " + line
         out.append(line)
-    # Fix hunk line counts: header must match number of lines in hunk body (or git says "corrupt")
     out = _fix_hunk_line_counts(out)
+    # Final pass: guarantee every hunk body line has exactly one of space, -, +
+    out = _sanitize_hunk_body_prefixes(out)
     return "\n".join(out) + "\n"
+
+
+def _sanitize_hunk_body_prefixes(lines: list[str]) -> list[str]:
+    """Ensure every line between @@ and ---/+++ starts with exactly one of space, -, +."""
+    result: list[str] = []
+    in_hunk = False
+    for line in lines:
+        if re.match(r"^@@\s+-\d+.*\+\d+.*@@\s*$", line.strip()):
+            in_hunk = True
+            result.append(line)
+            continue
+        if line.startswith("---") or line.startswith("+++"):
+            in_hunk = False
+            result.append(line)
+            continue
+        if in_hunk and line:
+            c = line[0]
+            if c not in (" ", "-", "+"):
+                line = " " + line
+            elif c == " " and line.startswith("  "):
+                pass
+        result.append(line)
+    return result
 
 
 def _fix_hunk_line_counts(lines: list[str]) -> list[str]:
@@ -214,24 +239,30 @@ def _fix_hunk_line_counts(lines: list[str]) -> list[str]:
         hm = re.match(r"^@@\s*(-\d+)\s*,\s*(\d+)\s*\+\s*(\d+)\s*,\s*(\d+)\s*@@\s*$", line.strip())
         if hm:
             i += 1
-            count_old = int(hm.group(2))
-            count_new = int(hm.group(4))
-            body_lines: list[str] = []
-            while i < len(lines) and not lines[i].startswith("@@"):
-                if lines[i].startswith("---") or lines[i].startswith("+++"):
+            body_lines = []
+            while i < len(lines):
+                next_line = lines[i]
+                if next_line.strip().startswith("@@") or next_line.startswith("---") or next_line.startswith("+++"):
                     break
-                body_lines.append(lines[i])
+                body_lines.append(next_line)
                 i += 1
-            # Unified diff: body has count_old lines (with -) or context, count_new with + or context
-            # Each line is context (space), remove (-), or add (+). Old count = context + removed; new = context + added
-            n_old = sum(1 for L in body_lines if L.startswith(" ") or L.startswith("-"))
-            n_new = sum(1 for L in body_lines if L.startswith(" ") or L.startswith("+"))
-            if (n_old != count_old or n_new != count_new) and body_lines:
+            n_old = sum(1 for L in body_lines if len(L) > 0 and L[0] in (" ", "-"))
+            n_new = sum(1 for L in body_lines if len(L) > 0 and L[0] in (" ", "+"))
+            if body_lines:
                 result[-1] = f"@@ {hm.group(1)},{n_old} +{hm.group(3)},{n_new} @@"
             result.extend(body_lines)
             continue
         i += 1
     return result
+
+
+def _diff_debug_lines(diff: str, max_lines: int = 20) -> str:
+    """Return a debug string showing each line with repr() so spaces/control chars are visible."""
+    lines = diff.split("\n")
+    parts = [f"[PR debug] Normalized diff has {len(lines)} lines. First {max_lines} lines (repr):"]
+    for idx, L in enumerate(lines[:max_lines]):
+        parts.append(f"  {idx + 1}: {repr(L)}")
+    return "\n".join(parts)
 
 
 def propose_fix(state: TicketState) -> dict:
@@ -385,8 +416,8 @@ def _create_branch_apply_and_push(repo, diff: str, token: str) -> tuple[str | No
         if r and (r.stderr or r.stdout):
             out += "\n\nGit output:\n" + (r.stderr or r.stdout or "").strip()
         if diff_used:
-            out += "\n\nDiff that was applied (for debugging):\n"
-            out += diff_used[:2000] + ("..." if len(diff_used) > 2000 else "")
+            out += "\n\n" + _diff_debug_lines(diff_used)
+            out += "\n\nDiff raw (first 1500 chars):\n" + diff_used[:1500] + ("..." if len(diff_used) > 1500 else "")
         return (None, out)
 
     def _restore_and_pop(current_branch: str, did_stash: bool) -> None:
@@ -415,12 +446,14 @@ def _create_branch_apply_and_push(repo, diff: str, token: str) -> tuple[str | No
         if r.returncode != 0:
             _restore_and_pop(current_branch, did_stash)
             return _fail("git checkout -b failed (ensure origin/{} exists).".format(default), r)
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".diff", delete=False, encoding="utf-8") as f:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".diff", delete=False, encoding="utf-8", newline="\n"
+        ) as f:
             f.write(diff)
             f.flush()
             path = f.name
         try:
-            r = _run(["git", "apply", "--ignore-whitespace", path])
+            r = _run(["git", "apply", "--ignore-whitespace", "--verbose", path])
             if r.returncode != 0:
                 _run(["git", "checkout", current_branch])
                 _run(["git", "branch", "-D", branch_name])
