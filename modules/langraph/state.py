@@ -17,3 +17,7 @@ class TicketState(TypedDict, total=False):
     classification: str
     response: str
     docs_context: str  # User docs (e.g. USER_DOCS.md) for question/confusion answers
+    code_context: str  # Example project source for bug RCA/fix
+    rca_result: str  # Root cause analysis text (bug path)
+    suggested_fix: str  # Unified diff or fix description (bug path)
+    pr_url: str  # Created PR URL if any (bug path)

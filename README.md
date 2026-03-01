@@ -77,7 +77,7 @@ Create a `.env` in the project root (do not commit it). For example:
 ```env
 ANTHROPIC_API_KEY=sk-ant-...
 # ANTHROPIC_MODEL=claude-sonnet-4-6   # optional, override if you get model errors
-# GITHUB_TOKEN=...   # when you add code_search / code_gen
+# GITHUB_TOKEN=...   # optional; for langraph bug flow: create PR from hotfix (also used by code_search / code_gen)
 ```
 
 **Format:** `ANTHROPIC_API_KEY=sk-ant-...` — no spaces around `=`, no quotes. The `.env` file must be in the project root (same folder as `pyproject.toml`).
