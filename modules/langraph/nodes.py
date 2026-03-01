@@ -195,6 +195,9 @@ def _normalize_diff_for_git(diff: str) -> str:
             continue
         if line.startswith("---") or line.startswith("+++"):
             in_hunk = False
+        # In unified diff, every hunk body line must start with space (context), -, or +
+        if in_hunk and line and not line.startswith((" ", "-", "+")):
+            line = " " + line
         out.append(line)
     # Fix hunk line counts: header must match number of lines in hunk body (or git says "corrupt")
     out = _fix_hunk_line_counts(out)
